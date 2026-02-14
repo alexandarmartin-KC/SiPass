@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { getEvents, getOverview } from "../api/client";
-import type { EventLog, ObjectEntity, StatusSnapshot } from "../api/types";
+import type { EventLog, ObjectEntity, Overview as OverviewType, StatusSnapshot } from "../api/types";
 import ConnectionStrip from "../components/ConnectionStrip";
 import KpiCards from "../components/KpiCards";
 import NeedsAttentionTable, { type AttentionFilters, type AttentionItem } from "../components/NeedsAttentionTable";
@@ -12,6 +12,7 @@ import {
   normalizeDerivedState,
   normalizeObjectType
 } from "../utils/overview";
+import { buildMockEvents, buildMockOverview } from "../utils/mockData";
 
 type Props = {
   controlRoomMode: boolean;
@@ -53,41 +54,58 @@ export default function Overview({ controlRoomMode }: Props) {
 
   useEffect(() => {
     let active = true;
+    const mockEnabled = (import.meta.env.VITE_USE_MOCK as string | undefined) === "true";
 
-    getOverview()
-      .then((response) => {
-        if (!active) return;
-        setDataStale(response.meta.dataStale);
-        setLastSync(response.meta.sipassLastSuccessAt);
-        setDisconnectedSince(response.meta.disconnectedSince);
+    const applyOverview = (payload: { meta: { dataStale: boolean; sipassLastSuccessAt?: string; disconnectedSince?: string }; data: OverviewType }) => {
+      setDataStale(payload.meta.dataStale);
+      setLastSync(payload.meta.sipassLastSuccessAt);
+      setDisconnectedSince(payload.meta.disconnectedSince);
 
-        const loadedObjects = response.data.objects ?? [];
-        setObjects(loadedObjects);
-        objectMapRef.current = new Map(loadedObjects.map((obj) => [obj.objectId, obj]));
+      const loadedObjects = payload.data.objects ?? [];
+      setObjects(loadedObjects);
+      objectMapRef.current = new Map(loadedObjects.map((obj) => [obj.objectId, obj]));
 
-        const snapshots = response.data.snapshots ?? [];
-        const merged = mergeSnapshots(snapshots, objectMapRef.current);
-        setItems(sortByPriority(merged));
-        lastSortAtRef.current = Date.now();
-      })
-      .catch(() => {
-        if (!active) return;
-        setDataStale(true);
-      });
+      const snapshots = payload.data.snapshots ?? [];
+      const merged = mergeSnapshots(snapshots, objectMapRef.current);
+      setItems(sortByPriority(merged));
+      lastSortAtRef.current = Date.now();
+    };
 
-    getEvents()
-      .then((response) => {
-        if (!active) return;
-        const important = response.data
-          .filter((entry) => isImportantSeverity(entry.severity))
-          .slice(0, 50)
-          .map((entry) => toEvent(entry));
-        setEvents(important);
-      })
-      .catch(() => {
-        if (!active) return;
-        setEvents([]);
-      });
+    if (mockEnabled) {
+      const mock = buildMockOverview(new Date());
+      applyOverview(mock as { meta: { dataStale: boolean; sipassLastSuccessAt?: string; disconnectedSince?: string }; data: OverviewType });
+    } else {
+      getOverview()
+        .then((response) => {
+          if (!active) return;
+          applyOverview(response as { meta: { dataStale: boolean; sipassLastSuccessAt?: string; disconnectedSince?: string }; data: OverviewType });
+        })
+        .catch(() => {
+          if (!active) return;
+          const mock = buildMockOverview(new Date());
+          applyOverview(mock as { meta: { dataStale: boolean; sipassLastSuccessAt?: string; disconnectedSince?: string }; data: OverviewType });
+        });
+    }
+
+    if (mockEnabled) {
+      const important = buildMockEvents().map((entry) => toEvent(entry));
+      setEvents(important);
+    } else {
+      getEvents()
+        .then((response) => {
+          if (!active) return;
+          const important = response.data
+            .filter((entry) => isImportantSeverity(entry.severity))
+            .slice(0, 50)
+            .map((entry) => toEvent(entry));
+          setEvents(important);
+        })
+        .catch(() => {
+          if (!active) return;
+          const important = buildMockEvents().map((entry) => toEvent(entry));
+          setEvents(important);
+        });
+    }
 
     return () => {
       active = false;
