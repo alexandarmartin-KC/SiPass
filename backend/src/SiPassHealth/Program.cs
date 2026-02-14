@@ -5,6 +5,7 @@ using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.EntityFrameworkCore;
 using SiPassHealth.Security;
 using SiPassHealth.SiPass;
+using SiPassHealth.SiPass.Mock;
 using SiPassHealth.StateEngine;
 using SiPassHealth.Storage;
 using SiPassHealth.Web;
@@ -59,6 +60,9 @@ builder.Services.AddOptions<SipassOptions>()
     .Bind(builder.Configuration.GetSection("Sipass"))
     .ValidateDataAnnotations();
 
+builder.Services.AddOptions<MockOptions>()
+    .Bind(builder.Configuration.GetSection("Mock"));
+
 builder.Services.AddOptions<StateEngineOptions>()
     .Bind(builder.Configuration.GetSection("StateEngine"))
     .ValidateDataAnnotations();
@@ -68,6 +72,18 @@ builder.Services.AddHttpClient<SiPassClient>();
 builder.Services.AddSingleton<StateEngine>();
 builder.Services.AddSingleton<SseBroker>();
 builder.Services.AddSingleton<SipassConnectionState>();
+
+var mode = builder.Configuration["Mode"] ?? "Live";
+if (mode.Equals("Mock", StringComparison.OrdinalIgnoreCase))
+{
+    builder.Services.AddSingleton<ISiPassProvider, MockSiPassProvider>();
+    builder.Services.AddSingleton<IMockScenarioControl>(sp =>
+        (MockSiPassProvider)sp.GetRequiredService<ISiPassProvider>());
+}
+else
+{
+    builder.Services.AddSingleton<ISiPassProvider, LiveSiPassProvider>();
+}
 
 builder.Services.AddHostedService<SiPassWorker>();
 
@@ -93,6 +109,7 @@ app.MapHealthChecks("/api/health");
 
 AuthEndpoints.Map(app);
 OverviewEndpoints.Map(app);
+MockEndpoints.Map(app);
 SseEndpoint.Map(app);
 
 app.MapFallbackToFile("index.html");

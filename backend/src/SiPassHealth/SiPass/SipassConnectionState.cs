@@ -6,6 +6,7 @@ public sealed class SipassConnectionState
     public DateTimeOffset? LastSuccessAt { get; private set; }
     public bool IsConnected { get; private set; }
     public bool DataStale { get; private set; }
+    public DateTimeOffset? DisconnectedSince { get; private set; }
 
     public void MarkSuccess(DateTimeOffset timestamp)
     {
@@ -14,6 +15,7 @@ public sealed class SipassConnectionState
             LastSuccessAt = timestamp;
             IsConnected = true;
             DataStale = false;
+            DisconnectedSince = null;
         }
     }
 
@@ -23,6 +25,26 @@ public sealed class SipassConnectionState
         {
             IsConnected = false;
             DataStale = true;
+            DisconnectedSince ??= DateTimeOffset.UtcNow;
+        }
+    }
+
+    public void UpdateStatus(bool isConnected, bool dataStale, DateTimeOffset timestamp)
+    {
+        lock (_lock)
+        {
+            if (isConnected)
+            {
+                LastSuccessAt = timestamp;
+                IsConnected = true;
+                DataStale = dataStale == false ? false : DataStale;
+                DisconnectedSince = null;
+                return;
+            }
+
+            IsConnected = false;
+            DataStale = true;
+            DisconnectedSince ??= timestamp;
         }
     }
 }

@@ -9,17 +9,18 @@ namespace SiPassHealth.Workers;
 public sealed class SiPassWorker : BackgroundService
 {
     private readonly ILogger<SiPassWorker> _logger;
-    private readonly SiPassClient _client;
+    private readonly ISiPassProvider _provider;
     private readonly SipassConnectionState _connection;
     private readonly StateEngine.StateEngine _stateEngine;
     private readonly IDbContextFactory<AppDbContext> _dbFactory;
     private readonly SseBroker _sse;
     private readonly StateEngineOptions _options;
     private readonly SipassOptions _sipassOptions;
+    private bool? _lastConnected;
 
     public SiPassWorker(
         ILogger<SiPassWorker> logger,
-        SiPassClient client,
+        ISiPassProvider provider,
         SipassConnectionState connection,
         StateEngine.StateEngine stateEngine,
         IDbContextFactory<AppDbContext> dbFactory,
@@ -28,7 +29,7 @@ public sealed class SiPassWorker : BackgroundService
         IOptions<SipassOptions> sipassOptions)
     {
         _logger = logger;
-        _client = client;
+        _provider = provider;
         _connection = connection;
         _stateEngine = stateEngine;
         _dbFactory = dbFactory;
@@ -45,30 +46,47 @@ public sealed class SiPassWorker : BackgroundService
 
         while (!stoppingToken.IsCancellationRequested)
         {
+            var allowTick = true;
             try
             {
                 if (DateTimeOffset.UtcNow >= nextRenew)
                 {
-                    await _client.RenewAsync(stoppingToken);
+                    await _provider.RenewAsync(stoppingToken);
                     nextRenew = DateTimeOffset.UtcNow.Add(renewInterval);
                 }
 
-                await _client.BaselineSyncAsync(stoppingToken);
-                _connection.MarkSuccess(DateTimeOffset.UtcNow);
+                var snapshot = await _provider.GetSnapshotAsync(stoppingToken);
+                allowTick = !snapshot.DataStale;
+                _connection.UpdateStatus(snapshot.IsConnected, snapshot.DataStale, snapshot.SnapshotAt);
+                PublishConnectionChange(snapshot.IsConnected);
+
+                if (!snapshot.DataStale)
+                {
+                    foreach (var device in snapshot.Devices)
+                    {
+                        _stateEngine.UpdateRawStatus(device.ObjectId, device.Type, device.IsOnline, device.SeenAt);
+                    }
+
+                    await PersistObjectsAsync(snapshot.Devices, stoppingToken);
+                }
             }
             catch (Exception ex)
             {
                 _logger.LogWarning(ex, "SiPass connection issue");
                 _connection.MarkFailure();
-                _sse.Publish("sipassConnectionChanged", new { connected = false });
+                PublishConnectionChange(false);
+                allowTick = false;
             }
 
-            var changes = _stateEngine.Tick(DateTimeOffset.UtcNow).ToList();
-            if (changes.Count > 0)
+            if (allowTick)
             {
-                foreach (var change in changes)
+                var changes = _stateEngine.Tick(DateTimeOffset.UtcNow).ToList();
+                if (changes.Count > 0)
                 {
-                    _sse.Publish("statusChanged", change);
+                    foreach (var change in changes)
+                    {
+                        _sse.Publish("statusChanged", change);
+                    }
                 }
             }
 
@@ -100,5 +118,37 @@ public sealed class SiPassWorker : BackgroundService
         }
 
         await db.SaveChangesAsync(cancellationToken);
+    }
+
+    private async Task PersistObjectsAsync(IEnumerable<SiPassDeviceSnapshot> devices, CancellationToken cancellationToken)
+    {
+        await using var db = await _dbFactory.CreateDbContextAsync(cancellationToken);
+        foreach (var device in devices)
+        {
+            var existing = await db.Objects.FindAsync(new object?[] { device.ObjectId }, cancellationToken);
+            if (existing is null)
+            {
+                existing = new ObjectEntity { ObjectId = device.ObjectId };
+                db.Objects.Add(existing);
+            }
+
+            existing.Type = device.Type;
+            existing.Name = device.Name;
+            existing.Path = device.Path;
+            existing.ParentId = device.ParentId;
+        }
+
+        await db.SaveChangesAsync(cancellationToken);
+    }
+
+    private void PublishConnectionChange(bool connected)
+    {
+        if (_lastConnected.HasValue && _lastConnected.Value == connected)
+        {
+            return;
+        }
+
+        _lastConnected = connected;
+        _sse.Publish("sipassConnectionChanged", new { connected });
     }
 }

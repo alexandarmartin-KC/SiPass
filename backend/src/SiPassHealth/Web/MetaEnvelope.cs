@@ -11,7 +11,8 @@ public static class MetaEnvelope
             meta = new
             {
                 dataStale = connection.DataStale,
-                sipassLastSuccessAt = connection.LastSuccessAt
+                sipassLastSuccessAt = connection.LastSuccessAt,
+                disconnectedSince = connection.DisconnectedSince
             },
             data = payload
         };
