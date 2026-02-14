@@ -1,5 +1,6 @@
 import type { StatusSnapshot } from "../api/types";
 import StatusPill from "./StatusPill";
+import { normalizeDerivedState } from "../utils/overview";
 
 type Props = {
   items: StatusSnapshot[];
@@ -25,7 +26,7 @@ export default function IssueTable({ items }: Props) {
           <tr key={item.objectId}>
             <td>{item.objectId}</td>
             <td>
-              <StatusPill state={item.derivedState} />
+              <StatusPill state={normalizeDerivedState(item.derivedState)} />
             </td>
             <td>{item.offlineSince ?? "-"}</td>
             <td>{item.flapCount24h}</td>
